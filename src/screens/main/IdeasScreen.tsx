@@ -4,13 +4,17 @@ import { Text, Button, Card, Chip, Searchbar, IconButton, Portal, Modal } from '
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
+import { StackNavigationProp } from '@react-navigation/stack';
 import { useAuth } from '../../context/AuthContext';
 import { colors } from '../../theme';
 import { useResponsiveDesign } from '../../hooks/useResponsiveDesign';
+import { DiscoverStackParamList } from '../../navigation/MainNavigator';
 
 const { width: screenWidth } = Dimensions.get('window');
 
 // Types
+type IdeasScreenNavigationProp = StackNavigationProp<DiscoverStackParamList, 'DiscoverMain'>;
+
 interface DateIdea {
   id: string;
   title: string;
@@ -133,7 +137,7 @@ const categories = ['All', 'Outdoor', 'Learning', 'Culture', 'Adventure', 'Enter
 const IdeasScreen = () => {
   const { user, partner } = useAuth();
   const { horizontalPadding, spacing, fontSizes, isSmallScreen } = useResponsiveDesign();
-  const navigation = useNavigation();
+  const navigation = useNavigation<IdeasScreenNavigationProp>();
 
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('All');
@@ -169,7 +173,7 @@ const IdeasScreen = () => {
 
   const planThisIdea = (idea: DateIdea) => {
     // Navigate to calendar with pre-filled idea
-    (navigation as any).navigate('Calendar', {
+    navigation.navigate('Calendar', {
       newEvent: {
         id: Date.now().toString(),
         title: idea.title,

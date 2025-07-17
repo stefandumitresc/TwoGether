@@ -1,16 +1,20 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { View, StyleSheet, ScrollView, TouchableOpacity, Dimensions } from 'react-native';
+import { View, StyleSheet, ScrollView, TouchableOpacity, Dimensions, Platform, Modal as RNModal } from 'react-native';
 import { Text, Button, Card, Portal, Modal, TextInput, Chip, IconButton } from 'react-native-paper';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { useRoute } from '@react-navigation/native';
+import { useRoute, RouteProp } from '@react-navigation/native';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import { useAuth } from '../../context/AuthContext';
 import { colors } from '../../theme';
 import { useResponsiveDesign } from '../../hooks/useResponsiveDesign';
+import { HomeStackParamList, DiscoverStackParamList } from '../../navigation/MainNavigator';
 
 const { width: screenWidth } = Dimensions.get('window');
 
 // Types
+type CalendarRouteProps = RouteProp<HomeStackParamList, 'Calendar'> | RouteProp<DiscoverStackParamList, 'Calendar'>;
+
 interface DateEvent {
   id: string;
   title: string;
@@ -66,7 +70,7 @@ const initialMockEvents: DateEvent[] = [
 const CalendarScreen = () => {
   const { user, partner } = useAuth();
   const { horizontalPadding, spacing, fontSizes, isSmallScreen } = useResponsiveDesign();
-  const route = useRoute();
+  const route = useRoute<CalendarRouteProps>();
 
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
@@ -75,16 +79,53 @@ const CalendarScreen = () => {
   const [newEventTitle, setNewEventTitle] = useState('');
   const [newEventTime, setNewEventTime] = useState('');
   const [newEventLocation, setNewEventLocation] = useState('');
+
+  // New state for HomeScreen-style modal
+  const [planDateTitle, setPlanDateTitle] = useState('');
+  const [modalSelectedDate, setModalSelectedDate] = useState<Date | null>(null);
+  const [modalSelectedTime, setModalSelectedTime] = useState<Date | null>(null);
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [showTimePicker, setShowTimePicker] = useState(false);
   const [events, setEvents] = useState<DateEvent[]>(initialMockEvents);
 
-  // Handle new event from navigation params
+  // Handle new event from navigation params - save directly to calendar
   useEffect(() => {
-    const params = route.params as { newEvent?: DateEvent } | undefined;
+    const params = route.params;
     if (params?.newEvent) {
-      setEvents(prevEvents => [...prevEvents, params.newEvent!]);
-      setSelectedDate(params.newEvent.date);
-      // Clear the navigation params to avoid adding the same event multiple times
-      (route.params as any) = undefined;
+      console.log('Saving new event from navigation:', params.newEvent);
+
+      // Add the event directly to the calendar
+      setEvents(prevEvents => {
+        // Check if event already exists to avoid duplicates
+        const eventExists = prevEvents.some(event =>
+          event.date === params.newEvent.date &&
+          event.title === params.newEvent.title &&
+          event.time === params.newEvent.time
+        );
+
+        if (!eventExists) {
+          const newCalendarEvent: DateEvent = {
+            id: params.newEvent.id || Date.now().toString(),
+            title: params.newEvent.title,
+            date: params.newEvent.date,
+            time: params.newEvent.time,
+            type: params.newEvent.type || 'planned',
+            plannedBy: params.newEvent.plannedBy || 'you',
+            location: params.newEvent.location,
+          };
+          console.log('Added new event to calendar:', newCalendarEvent);
+          return [...prevEvents, newCalendarEvent];
+        }
+        return prevEvents;
+      });
+
+      // Navigate calendar to the event's date
+      if (params.newEvent.date) {
+        const eventDate = new Date(params.newEvent.date);
+        setCurrentDate(eventDate);
+        setSelectedDate(params.newEvent.date);
+        console.log('Navigated calendar to event date:', eventDate);
+      }
     }
   }, [route.params]);
 
@@ -196,6 +237,98 @@ const CalendarScreen = () => {
     }
   };
 
+  // Helper functions from HomeScreen for date/time formatting and handling
+  const formatDateForDisplay = (date: Date | null): string => {
+    if (!date) return '';
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    const year = date.getFullYear();
+    return `${month}/${day}/${year}`;
+  };
+
+  const formatTimeForDisplay = (time: Date | null): string => {
+    if (!time) return '';
+    return time.toLocaleTimeString('en-US', {
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    });
+  };
+
+  const onDateChange = (event: any, selectedDate?: Date) => {
+    console.log('CalendarScreen date change:', event.type, selectedDate);
+    if (Platform.OS === 'android') {
+      setShowDatePicker(false);
+      if (event.type === 'dismissed') {
+        return; // Don't update on dismiss
+      }
+    }
+    if (selectedDate) {
+      console.log('Setting modal selected date to:', selectedDate);
+      setModalSelectedDate(selectedDate);
+    }
+  };
+
+  const onTimeChange = (event: any, selectedTime?: Date) => {
+    console.log('CalendarScreen time change:', event.type, selectedTime);
+    if (Platform.OS === 'android') {
+      setShowTimePicker(false);
+      if (event.type === 'dismissed') {
+        return; // Don't update on dismiss
+      }
+    }
+    if (selectedTime) {
+      console.log('Setting modal selected time to:', selectedTime);
+      setModalSelectedTime(selectedTime);
+    }
+  };
+
+  const closeModal = () => {
+    setShowAddModal(false);
+    setPlanDateTitle('');
+    setModalSelectedDate(null);
+    setModalSelectedTime(null);
+    setShowDatePicker(false);
+    setShowTimePicker(false);
+    setNewEventLocation('');
+  };
+
+  // Cleanup on unmount or navigation
+  useEffect(() => {
+    return () => {
+      // Cleanup any open modals when component unmounts
+      setShowAddModal(false);
+      setShowEventModal(false);
+      setShowDatePicker(false);
+      setShowTimePicker(false);
+    };
+  }, []);
+
+  const handlePlanDate = () => {
+    if (planDateTitle.trim() && modalSelectedDate && modalSelectedTime) {
+      const dateStr = modalSelectedDate.toISOString().split('T')[0];
+      const timeStr = formatTimeForDisplay(modalSelectedTime);
+
+      const newEvent: DateEvent = {
+        id: Date.now().toString(),
+        title: planDateTitle.trim(),
+        date: dateStr,
+        time: timeStr,
+        type: 'planned',
+        plannedBy: 'you',
+        location: newEventLocation.trim() || undefined,
+      };
+
+      setEvents(prev => [...prev, newEvent]);
+
+      // Navigate to the created event's date and select it
+      setCurrentDate(modalSelectedDate);
+      setSelectedDate(dateStr);
+
+      closeModal();
+    }
+  };
+
   const getEventTypeColor = (type: DateEvent['type']) => {
     switch (type) {
       case 'planned': return colors.primary;
@@ -224,7 +357,7 @@ const CalendarScreen = () => {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={['left', 'right', 'bottom']}>
+    <SafeAreaView style={styles.container} edges={['left', 'right']}>
       <View style={[styles.content, { paddingHorizontal: horizontalPadding }]}>
         {/* Calendar Header */}
         <View style={styles.header}>
@@ -390,68 +523,188 @@ const CalendarScreen = () => {
         )}
       </View>
 
-      {/* Add Event Modal */}
-      <Portal>
-        <Modal
-          visible={showAddModal}
-          onDismiss={() => setShowAddModal(false)}
-          contentContainerStyle={[styles.modalContainer, { margin: horizontalPadding }]}
-        >
-          <Text variant="titleLarge" style={[styles.modalTitle, { fontSize: fontSizes.large }]}>
-            Plan a Date
-          </Text>
-          <Text variant="bodyMedium" style={[styles.modalDate, { fontSize: fontSizes.small }]}>
-            {selectedDate && formatLocalDate(selectedDate, {
-              weekday: 'long',
-              month: 'long',
-              day: 'numeric',
-            })}
-          </Text>
+      {/* Plan Date Modal - HomeScreen Style */}
+      <RNModal
+        visible={showAddModal}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={closeModal}
+      >
+        <SafeAreaView style={styles.modalContainer}>
+          <View style={styles.modalHeader}>
+            <TouchableOpacity onPress={closeModal} style={styles.closeButton}>
+              <MaterialCommunityIcons name="close" size={24} color={colors.text} />
+            </TouchableOpacity>
+            <Text style={styles.modalTitle}>Plan a Date</Text>
+            <View style={styles.closeButtonPlaceholder} />
+          </View>
 
-          <TextInput
-            label="What are you planning?"
-            value={newEventTitle}
-            onChangeText={setNewEventTitle}
-            mode="outlined"
-            style={styles.modalInput}
-          />
+          <ScrollView style={styles.modalScrollView} contentContainerStyle={styles.modalScrollContent}>
+            <View style={styles.modalForm}>
+              <Text style={styles.modalSubtitle}>Let's plan something special together!</Text>
 
-          <TextInput
-            label="Time (optional)"
-            value={newEventTime}
-            onChangeText={setNewEventTime}
-            mode="outlined"
-            placeholder="e.g., 7:00 PM"
-            style={styles.modalInput}
-          />
+              <TextInput
+                label="What are you planning? *"
+                value={planDateTitle}
+                onChangeText={setPlanDateTitle}
+                mode="outlined"
+                style={styles.modalInput}
+                placeholder="e.g., Dinner at Italian restaurant"
+              />
 
-          <TextInput
-            label="Location (optional)"
-            value={newEventLocation}
-            onChangeText={setNewEventLocation}
-            mode="outlined"
-            style={styles.modalInput}
-          />
+              <View style={styles.dateTimeContainer}>
+                <View style={styles.dateTimeButton}>
+                  <TextInput
+                    label="Date *"
+                    value={formatDateForDisplay(modalSelectedDate)}
+                    mode="outlined"
+                    style={styles.dateTimeInput}
+                    editable={false}
+                    placeholder="MM/DD/YYYY"
+                    onPressIn={() => {
+                      console.log('Date picker pressed');
+                      setShowDatePicker(true);
+                    }}
+                    right={<TextInput.Icon
+                      icon="calendar"
+                      onPress={() => {
+                        console.log('Date icon pressed');
+                        setShowDatePicker(true);
+                      }}
+                    />}
+                  />
+                </View>
 
-          <View style={styles.modalActions}>
-            <Button
-              mode="outlined"
-              onPress={() => setShowAddModal(false)}
-              style={styles.modalButton}
-            >
+                <View style={styles.dateTimeButton}>
+                  <TextInput
+                    label="Time *"
+                    value={formatTimeForDisplay(modalSelectedTime)}
+                    mode="outlined"
+                    style={styles.dateTimeInput}
+                    editable={false}
+                    placeholder="HH:MM AM/PM"
+                    onPressIn={() => {
+                      console.log('Time picker pressed');
+                      setShowTimePicker(true);
+                    }}
+                    right={<TextInput.Icon
+                      icon="clock"
+                      onPress={() => {
+                        console.log('Time icon pressed');
+                        setShowTimePicker(true);
+                      }}
+                    />}
+                  />
+                </View>
+              </View>
+
+              {/* Date Picker inside modal */}
+              {showDatePicker && (
+                <View style={styles.pickerContainer}>
+                  <View style={styles.pickerHeader}>
+                    <Text style={styles.pickerTitle}>Select Date</Text>
+                    <Button
+                      mode="contained"
+                      onPress={() => setShowDatePicker(false)}
+                      style={styles.pickerHeaderButton}
+                      compact
+                    >
+                      Done
+                    </Button>
+                  </View>
+                  <View style={styles.pickerWrapper}>
+                    <DateTimePicker
+                      value={modalSelectedDate || new Date()}
+                      mode="date"
+                      display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                      onChange={onDateChange}
+                      minimumDate={new Date()}
+                      maximumDate={(() => {
+                        // Set maximum date to 2 years from now to prevent endless spinning
+                        const maxDate = new Date();
+                        maxDate.setFullYear(maxDate.getFullYear() + 2);
+                        return maxDate;
+                      })()}
+                      style={styles.picker}
+                      textColor={colors.text}
+                      accentColor={colors.primary}
+                    />
+                  </View>
+                  {modalSelectedDate && (
+                    <Text style={styles.selectedValueText}>
+                      Selected: {formatDateForDisplay(modalSelectedDate)}
+                    </Text>
+                  )}
+                </View>
+              )}
+
+              {/* Time Picker inside modal */}
+              {showTimePicker && (
+                <View style={styles.pickerContainer}>
+                  <View style={styles.pickerHeader}>
+                    <Text style={styles.pickerTitle}>Select Time</Text>
+                    <Button
+                      mode="contained"
+                      onPress={() => setShowTimePicker(false)}
+                      style={styles.pickerHeaderButton}
+                      compact
+                    >
+                      Done
+                    </Button>
+                  </View>
+                  <View style={styles.pickerWrapper}>
+                    <DateTimePicker
+                      value={modalSelectedTime || (() => {
+                        const defaultTime = new Date();
+                        defaultTime.setHours(19, 0, 0, 0); // 7:00 PM
+                        return defaultTime;
+                      })()}
+                      mode="time"
+                      display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                      onChange={onTimeChange}
+                      is24Hour={false}
+                      neutralButtonLabel="Clear"
+                      timeZoneOffsetInMinutes={undefined}
+                      style={styles.picker}
+                      textColor={colors.text}
+                      accentColor={colors.primary}
+                    />
+                  </View>
+                  {modalSelectedTime && (
+                    <Text style={styles.selectedValueText}>
+                      Selected: {formatTimeForDisplay(modalSelectedTime)}
+                    </Text>
+                  )}
+                </View>
+              )}
+
+              <TextInput
+                label="Where? (optional)"
+                value={newEventLocation}
+                onChangeText={setNewEventLocation}
+                mode="outlined"
+                style={styles.modalInput}
+                placeholder="e.g., Downtown, Luigi's Restaurant"
+              />
+            </View>
+          </ScrollView>
+
+          <View style={styles.modalButtonContainer}>
+            <Button mode="outlined" onPress={closeModal} style={styles.modalCancelButton}>
               Cancel
             </Button>
             <Button
               mode="contained"
-              onPress={handleAddEvent}
-              style={styles.modalButton}
-              disabled={!newEventTitle.trim()}
+              onPress={handlePlanDate}
+              style={styles.modalPlanButton}
+              disabled={!planDateTitle.trim() || !modalSelectedDate || !modalSelectedTime}
+              loading={false}
             >
-              Add Date
+              Plan Date
             </Button>
           </View>
-        </Modal>
-      </Portal>
+        </SafeAreaView>
+      </RNModal>
     </SafeAreaView>
   );
 };
@@ -609,28 +862,115 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   modalContainer: {
-    backgroundColor: colors.surface,
-    borderRadius: 16,
-    padding: 24,
+    flex: 1,
+    backgroundColor: colors.background,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  closeButton: {
+    padding: 8,
+  },
+  closeButtonPlaceholder: {
+    width: 40,
   },
   modalTitle: {
-    color: colors.text,
+    fontSize: 18,
     fontWeight: 'bold',
-    marginBottom: 8,
+    color: colors.text,
   },
-  modalDate: {
+  modalScrollView: {
+    flex: 1,
+  },
+  modalScrollContent: {
+    paddingBottom: 100,
+  },
+  modalForm: {
+    padding: 20,
+  },
+  modalSubtitle: {
+    fontSize: 16,
     color: colors.textSecondary,
-    marginBottom: 20,
+    textAlign: 'center',
+    marginBottom: 24,
   },
   modalInput: {
     marginBottom: 16,
   },
-  modalActions: {
+  dateTimeContainer: {
     flexDirection: 'row',
     gap: 12,
-    marginTop: 8,
+    marginBottom: 16,
   },
-  modalButton: {
+  dateTimeButton: {
+    flex: 1,
+  },
+  dateTimeInput: {
+    flex: 1,
+  },
+  pickerContainer: {
+    backgroundColor: colors.surface,
+    borderRadius: 12,
+    marginBottom: 20,
+    paddingVertical: 16,
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+  },
+  pickerHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    marginBottom: 12,
+  },
+  pickerTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: colors.text,
+  },
+  pickerHeaderButton: {
+    borderRadius: 20,
+  },
+  pickerWrapper: {
+    alignItems: 'center',
+    paddingHorizontal: 20,
+  },
+  picker: {
+    width: '100%',
+    backgroundColor: 'transparent',
+  },
+  selectedValueText: {
+    textAlign: 'center',
+    color: colors.primary,
+    fontWeight: '500',
+    marginTop: 8,
+    fontSize: 14,
+  },
+  modalButtonContainer: {
+    flexDirection: 'row',
+    gap: 12,
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    backgroundColor: colors.surface,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  modalCancelButton: {
+    flex: 1,
+  },
+  modalPlanButton: {
     flex: 1,
   },
 });
